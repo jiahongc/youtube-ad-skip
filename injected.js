@@ -1,154 +1,134 @@
-// Runs in YouTube's page context (injected via <script> tag).
+// Runs in YouTube's page context (world: "MAIN", document_start).
 // Finds SMART_SKIP segment data and posts timestamps to the content script.
 
 (function () {
   'use strict';
 
-  console.log('[AutoSkip] injected.js loaded in MAIN world');
+  console.log('[AutoSkip] injected.js loaded');
 
-  // ── Find ytInitialData from multiple sources ─────────────────────────────
+  // ── Find page data from multiple sources ─────────────────────────────────
 
   function getPageData() {
-    // Try known globals
     if (window.ytInitialData) return window.ytInitialData;
-
-    // Try ytcfg
-    try {
-      const cfg = window.ytcfg?.get?.('INITIAL_DATA');
-      if (cfg) return cfg;
-    } catch (_) {}
-
-    // Try the yt.config_ path
-    try {
-      if (window.yt?.config_?.INITIAL_DATA) return window.yt.config_.INITIAL_DATA;
-    } catch (_) {}
-
+    try { const d = window.ytcfg?.get?.('INITIAL_DATA'); if (d) return d; } catch (_) {}
+    try { if (window.yt?.config_?.INITIAL_DATA) return window.yt.config_.INITIAL_DATA; } catch (_) {}
     return null;
   }
 
-  // ── Extract skip segments from entity store ──────────────────────────────
+  // ── Extract SMART_SKIP markers from entity mutations ─────────────────────
 
   function findSkipSegments(data) {
     if (!data) return [];
 
-    const mutations =
-      data?.frameworkUpdates?.entityBatchUpdate?.mutations;
-    if (!mutations) {
-      console.log('[AutoSkip] No entityBatchUpdate.mutations found');
-      return [];
-    }
-
-    console.log('[AutoSkip] Found', mutations.length, 'entity mutations');
+    const mutations = data?.frameworkUpdates?.entityBatchUpdate?.mutations;
+    if (!mutations) return [];
 
     const segments = [];
 
     for (const m of mutations) {
       if (!m.entityKey || !m.payload) continue;
 
+      // Decode the base64 entity key to check for SMART_SKIP
       let isSkip = false;
       try {
-        const decoded = atob(decodeURIComponent(m.entityKey));
-        isSkip = decoded.includes('SMART_SKIP');
+        isSkip = atob(decodeURIComponent(m.entityKey)).includes('SMART_SKIP');
       } catch (_) {
         try { isSkip = atob(m.entityKey).includes('SMART_SKIP'); } catch (_2) {}
       }
-
       if (!isSkip) continue;
 
-      console.log('[AutoSkip] SMART_SKIP entity found:', JSON.stringify(m, null, 2));
+      console.log('[AutoSkip] SMART_SKIP entity:', JSON.stringify(m.payload));
 
-      const timing = extractTiming(m.payload);
-      if (timing) {
-        segments.push(timing);
-        console.log('[AutoSkip] Extracted timing:', timing);
-      } else {
-        console.log('[AutoSkip] Could not extract timing — raw payload keys:',
-          flatKeys(m.payload));
+      // YouTube stores markers in: payload.macroMarkersListEntity.markersList.markers[]
+      // Each marker has: startMillis (string), durationMillis (string), sourceType
+      const markers =
+        m.payload?.macroMarkersListEntity?.markersList?.markers;
+
+      if (!markers?.length) continue;
+
+      for (const marker of markers) {
+        const startMs = parseInt(marker.startMillis, 10);
+        const durMs   = parseInt(marker.durationMillis, 10);
+
+        if (isNaN(startMs)) continue;
+
+        // durationMillis:"0" means the marker is a point, not a range.
+        // YouTube's Jump ahead seeks forward from this point — we need the
+        // end position. Look for the next marker or use a fallback.
+        segments.push({
+          startMs,
+          durationMs: durMs || 0,
+          // We'll resolve the end time later if there are multiple markers
+          raw: marker,
+        });
       }
     }
 
+    // If we have multiple markers, each one's "end" is the next one's "start".
+    // If there's only one marker with duration 0, we can't know the end time
+    // from the data alone — fall back to button-clicking.
     return segments;
   }
 
-  // Walk an object and return all leaf key paths (helps us discover field names)
-  function flatKeys(obj, prefix, depth) {
-    if (!obj || typeof obj !== 'object' || (depth || 0) > 6) return [];
-    const out = [];
-    for (const [k, v] of Object.entries(obj)) {
-      const path = prefix ? `${prefix}.${k}` : k;
-      if (v && typeof v === 'object') {
-        out.push(...flatKeys(v, path, (depth || 0) + 1));
+  // ── Resolve end times and post to content script ─────────────────────────
+
+  function process(data) {
+    const raw = findSkipSegments(data);
+    if (!raw.length) return;
+
+    const resolved = [];
+
+    for (let i = 0; i < raw.length; i++) {
+      const seg = raw[i];
+      let endMs;
+
+      if (seg.durationMs > 0) {
+        endMs = seg.startMs + seg.durationMs;
+      } else if (i + 1 < raw.length) {
+        // End at the next marker's start
+        endMs = raw[i + 1].startMs;
       } else {
-        out.push(`${path}=${v}`);
+        // Single marker, duration 0 — can't determine end.
+        // Signal content script to use button-click fallback at this timestamp.
+        endMs = 0;
       }
-    }
-    return out;
-  }
 
-  function extractTiming(obj, depth) {
-    if (!obj || typeof obj !== 'object' || (depth || 0) > 10) return null;
-
-    const keys = Object.keys(obj);
-    const startKey = keys.find(k => /start.*(ms|millis|time)/i.test(k));
-    const endKey   = keys.find(k => /end.*(ms|millis|time)/i.test(k));
-    const durKey   = keys.find(k => /duration.*(ms|millis|time)/i.test(k));
-
-    if (startKey) {
-      const startMs = parseInt(obj[startKey], 10);
-      let endMs = endKey ? parseInt(obj[endKey], 10) : NaN;
-      if (isNaN(endMs) && durKey) endMs = startMs + parseInt(obj[durKey], 10);
-      if (!isNaN(startMs) && !isNaN(endMs) && endMs > startMs) {
-        return { startMs, endMs };
-      }
+      resolved.push({ startMs: seg.startMs, endMs });
     }
 
-    for (const v of Object.values(obj)) {
-      const r = extractTiming(v, (depth || 0) + 1);
-      if (r) return r;
-    }
-    return null;
-  }
-
-  // ── Post to content script ───────────────────────────────────────────────
-
-  function post(segments) {
-    window.postMessage({ source: 'autoskip', type: 'segments', segments }, '*');
-  }
-
-  function run(data) {
-    const segments = findSkipSegments(data);
-    if (segments.length) {
-      post(segments);
-      console.log('[AutoSkip] Posted', segments.length, 'segment(s) to content script');
-    }
+    window.postMessage(
+      { source: 'autoskip', type: 'segments', segments: resolved },
+      '*'
+    );
+    console.log('[AutoSkip] Posted segments:', resolved);
   }
 
   // ── Triggers ─────────────────────────────────────────────────────────────
 
-  // 1. Poll for page data on initial load
+  // 1. Poll for page data
   let attempts = 0;
   const poll = setInterval(() => {
     attempts++;
     const data = getPageData();
     if (data) {
       clearInterval(poll);
-      console.log('[AutoSkip] Found page data on attempt', attempts);
-      run(data);
-    } else if (attempts > 30) {
+      console.log('[AutoSkip] Page data found on attempt', attempts);
+      process(data);
+    } else if (attempts > 50) {
       clearInterval(poll);
-      console.log('[AutoSkip] Gave up polling for page data after', attempts, 'attempts');
+      console.log('[AutoSkip] No page data after', attempts, 'attempts');
     }
-  }, 400);
+  }, 300);
 
   // 2. SPA navigation
   document.addEventListener('yt-navigate-finish', () => {
     setTimeout(() => {
       const data = getPageData();
-      if (data) run(data);
+      if (data) process(data);
     }, 1500);
   });
 
-  // 3. Intercept fetch for /next API responses
+  // 3. Intercept fetch — catches /next and /player API responses
   const origFetch = window.fetch;
   window.fetch = async function (...args) {
     const resp = await origFetch.apply(this, args);
@@ -156,8 +136,8 @@
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
       if (url.includes('/youtubei/v1/next') || url.includes('/youtubei/v1/player')) {
         resp.clone().json().then(d => {
-          console.log('[AutoSkip] Intercepted fetch:', url.split('?')[0]);
-          run(d);
+          console.log('[AutoSkip] Intercepted:', url.split('?')[0]);
+          process(d);
         }).catch(() => {});
       }
     } catch (_) {}
