@@ -53,12 +53,32 @@ function showToast(label) {
   toast.textContent = `⏭  ${label}`;
   toast.style.opacity = '1';
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => (toast.style.opacity = '0'), 2200);
+  toast._t = setTimeout(() => (toast.style.opacity = '0'), 4000);
 }
 
 // ── Click logic ───────────────────────────────────────────────────────────────
 
 let lastClick = 0;
+
+function clickAndNotify(btn, label) {
+  const video = document.querySelector('video');
+  const timeBefore = video ? video.currentTime : null;
+
+  btn.click();
+  lastClick = Date.now();
+
+  // Measure how many seconds were actually skipped
+  setTimeout(() => {
+    if (video && timeBefore !== null) {
+      const skipped = Math.round(video.currentTime - timeBefore);
+      showToast(skipped > 0 ? `${label} · ${skipped}s skipped` : label);
+    } else {
+      showToast(label);
+    }
+  }, 300);
+
+  console.log('[AutoSkip] Clicked:', label);
+}
 
 function tryClick() {
   if (Date.now() - lastClick < 800) return; // debounce
@@ -66,11 +86,8 @@ function tryClick() {
   for (const selector of SKIP_SELECTORS) {
     const btn = document.querySelector(selector);
     if (btn && isVisible(btn)) {
-      btn.click();
-      lastClick = Date.now();
       const label = (btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead').trim();
-      showToast(label);
-      console.log('[AutoSkip] Clicked:', selector);
+      clickAndNotify(btn, label);
       return;
     }
   }
@@ -81,10 +98,7 @@ function tryClick() {
   for (const el of player.querySelectorAll('button, [role="button"]')) {
     const text = (el.innerText || el.textContent || '').trim();
     if (SKIP_TEXT.test(text) && isVisible(el)) {
-      el.click();
-      lastClick = Date.now();
-      showToast(text);
-      console.log('[AutoSkip] Clicked by text:', text);
+      clickAndNotify(el, text);
       return;
     }
   }
