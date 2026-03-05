@@ -2,6 +2,12 @@
 // Strategy 1: Receive skip-segment timestamps from injected.js → seek directly.
 // Strategy 2: MutationObserver fallback — click the button if user reveals it.
 
+// ── Inject the MAIN-world script into YouTube's page context ────────────────
+const s = document.createElement('script');
+s.src = chrome.runtime.getURL('injected.js');
+(document.head || document.documentElement).appendChild(s);
+s.onload = () => s.remove();
+
 const SKIP_SELECTORS = [
   '[aria-label="Jump ahead"]',
   '[title="Jump ahead"]',
