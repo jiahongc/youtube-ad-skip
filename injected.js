@@ -189,7 +189,10 @@
 
   function process(data) {
     const jumpAhead = extractJumpAheadSegments(data);
-    const chapters  = extractChapterSegments(data);
+    let chapters = [];
+    try { chapters = extractChapterSegments(data); } catch (e) {
+      console.log('[AutoSkip] Chapter extraction error:', e);
+    }
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
   }
