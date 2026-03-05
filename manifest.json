@@ -1,14 +1,20 @@
 {
   "manifest_version": 3,
   "name": "YouTube Auto Skip Promotions",
-  "version": "1.0",
-  "description": "Automatically clicks YouTube's built-in skip button for paid promotions in videos.",
+  "version": "1.1",
+  "description": "Automatically skips commonly-skipped sections (Jump ahead) in YouTube videos.",
   "permissions": [],
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.youtube.com/*"],
+      "js": ["injected.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ],
   "icons": {

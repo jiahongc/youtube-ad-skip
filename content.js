@@ -1,15 +1,16 @@
-// YouTube Auto Skip — auto-clicks "Jump ahead" and other native skip buttons.
+// YouTube Auto Skip — content script (ISOLATED world).
+// Strategy 1: Receive skip-segment timestamps from injected.js → seek directly.
+// Strategy 2: MutationObserver fallback — click the button if user reveals it.
 
 const SKIP_SELECTORS = [
-  '[aria-label="Jump ahead"]',        // Jump ahead (ViewModel renderer)
-  '[title="Jump ahead"]',             // Alt attribute
-  '.ytp-jump-ahead-button',           // ytp- guess
-  '.ytp-skip-intro-button',           // Skip intro
-  '.ytp-ad-skip-button',              // Pre-roll ad skip
+  '[aria-label="Jump ahead"]',
+  '[title="Jump ahead"]',
+  '.ytp-jump-ahead-button',
+  '.ytp-skip-intro-button',
+  '.ytp-ad-skip-button',
   '.ytp-skip-ad-button',
   'button.ytp-ad-skip-button-modern',
 ];
-
 const SKIP_TEXT = /^jump ahead$|^skip/i;
 
 function isVisible(el) {
@@ -17,75 +18,86 @@ function isVisible(el) {
   return r.width > 0 && r.height > 0;
 }
 
-// ── Toast notification ────────────────────────────────────────────────────────
+// ── Toast ─────────────────────────────────────────────────────────────────────
 
-function showToast(label) {
+function showToast(msg) {
   const player = document.querySelector('#movie_player');
   if (!player) return;
 
-  let toast = document.getElementById('autoskip-toast');
-  if (!toast) {
-    toast = document.createElement('div');
-    toast.id = 'autoskip-toast';
-    Object.assign(toast.style, {
-      position:      'absolute',
-      bottom:        '64px',
-      left:          '50%',
-      transform:     'translateX(-50%)',
-      background:    'rgba(0,0,0,0.78)',
-      color:         '#fff',
-      padding:       '7px 16px',
-      borderRadius:  '20px',
-      fontSize:      '14px',
-      fontFamily:    'Roboto, sans-serif',
-      fontWeight:    '500',
-      letterSpacing: '0.01em',
-      zIndex:        '9999',
-      pointerEvents: 'none',
-      opacity:       '0',
-      transition:    'opacity 0.15s ease',
-      whiteSpace:    'nowrap',
+  let t = document.getElementById('autoskip-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'autoskip-toast';
+    Object.assign(t.style, {
+      position: 'absolute', bottom: '64px', left: '50%',
+      transform: 'translateX(-50%)',
+      background: 'rgba(0,0,0,0.78)', color: '#fff',
+      padding: '7px 16px', borderRadius: '20px',
+      fontSize: '14px', fontFamily: 'Roboto, sans-serif',
+      fontWeight: '500', letterSpacing: '0.01em',
+      zIndex: '9999', pointerEvents: 'none',
+      opacity: '0', transition: 'opacity 0.15s ease', whiteSpace: 'nowrap',
     });
-    player.appendChild(toast);
+    player.appendChild(t);
   }
-
-  toast.textContent = `⏭  ${label}`;
-  toast.style.opacity = '1';
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => (toast.style.opacity = '0'), 4000);
+  t.textContent = `⏭  ${msg}`;
+  t.style.opacity = '1';
+  clearTimeout(t._t);
+  t._t = setTimeout(() => (t.style.opacity = '0'), 4000);
 }
 
-// ── Click logic ───────────────────────────────────────────────────────────────
+// ── Strategy 1: Auto-seek from injected.js timestamps ─────────────────────
+
+let activeHandler = null;
+
+window.addEventListener('message', (e) => {
+  if (e.data?.source !== 'autoskip' || e.data?.type !== 'segments') return;
+  setupAutoSeek(e.data.segments);
+});
+
+function setupAutoSeek(segments) {
+  if (!segments?.length) return;
+
+  const video = document.querySelector('video');
+  if (!video) return;
+
+  // Remove previous listener
+  if (activeHandler) video.removeEventListener('timeupdate', activeHandler);
+
+  const skipped = new Set();
+
+  activeHandler = () => {
+    const ms = video.currentTime * 1000;
+    for (const seg of segments) {
+      const key = `${seg.startMs}-${seg.endMs}`;
+      if (skipped.has(key)) continue;
+      // Trigger when within 1.5 s of the segment start
+      if (ms >= seg.startMs && ms < seg.startMs + 1500) {
+        const skipSec = Math.round((seg.endMs - seg.startMs) / 1000);
+        video.currentTime = seg.endMs / 1000;
+        skipped.add(key);
+        showToast(`Jump ahead · ${skipSec}s skipped`);
+        console.log('[AutoSkip] Seeked past segment', seg);
+        break;
+      }
+    }
+  };
+
+  video.addEventListener('timeupdate', activeHandler);
+  console.log('[AutoSkip] Auto-seek armed for', segments.length, 'segment(s)');
+}
+
+// ── Strategy 2: Button-click fallback (when user moves mouse) ─────────────
 
 let lastClick = 0;
-
-function clickAndNotify(btn, label) {
-  const video = document.querySelector('video');
-  const timeBefore = video ? video.currentTime : null;
-
-  btn.click();
-  lastClick = Date.now();
-
-  setTimeout(() => {
-    if (video && timeBefore !== null) {
-      const skipped = Math.round(video.currentTime - timeBefore);
-      showToast(skipped > 0 ? `${label} · ${skipped}s skipped` : label);
-    } else {
-      showToast(label);
-    }
-  }, 300);
-
-  console.log('[AutoSkip] Clicked:', label);
-}
 
 function tryClick() {
   if (Date.now() - lastClick < 800) return;
 
-  for (const selector of SKIP_SELECTORS) {
-    const btn = document.querySelector(selector);
+  for (const sel of SKIP_SELECTORS) {
+    const btn = document.querySelector(sel);
     if (btn && isVisible(btn)) {
-      const label = (btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead').trim();
-      clickAndNotify(btn, label);
+      clickBtn(btn, btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead');
       return;
     }
   }
@@ -95,44 +107,28 @@ function tryClick() {
   for (const el of player.querySelectorAll('button, [role="button"]')) {
     const text = (el.innerText || el.textContent || '').trim();
     if (SKIP_TEXT.test(text) && isVisible(el)) {
-      clickAndNotify(el, text);
+      clickBtn(el, text);
       return;
     }
   }
 }
 
-// ── Smart nudge ───────────────────────────────────────────────────────────────
-// Only nudge when controls are already hidden (ytp-autohide on the player).
-// Immediately re-add ytp-autohide after the check so controls collapse again
-// instead of staying visible for YouTube's full 3-second idle timer.
-
-function nudgeIfHidden() {
-  const player = document.querySelector('#movie_player, .html5-video-player');
-  if (!player) return;
-
+function clickBtn(btn, label) {
   const video = document.querySelector('video');
-  if (!video || video.paused) return; // no need to nudge when paused
-
-  // If controls are already visible the user is interacting — MutationObserver handles it
-  if (!player.classList.contains('ytp-autohide')) return;
-
-  const r = player.getBoundingClientRect();
-  player.dispatchEvent(new MouseEvent('mousemove', {
-    bubbles: true, cancelable: true, view: window,
-    clientX: r.left + r.width / 2,
-    clientY: r.top + r.height / 2,
-  }));
-
-  // Give YouTube ~300ms to render the button, then click + re-hide immediately
+  const before = video ? video.currentTime : null;
+  btn.click();
+  lastClick = Date.now();
   setTimeout(() => {
-    tryClick();
-    player.classList.add('ytp-autohide');
+    if (video && before !== null) {
+      const sec = Math.round(video.currentTime - before);
+      showToast(sec > 0 ? `${label} · ${sec}s skipped` : label);
+    } else {
+      showToast(label);
+    }
   }, 300);
 }
 
-// ── Observers ─────────────────────────────────────────────────────────────────
-
-// React instantly when button appears while user is already interacting
+// MutationObserver catches the button appearing when user moves their mouse
 const observer = new MutationObserver(tryClick);
 observer.observe(document.body, {
   childList: true,
@@ -140,6 +136,3 @@ observer.observe(document.body, {
   attributes: true,
   attributeFilter: ['class', 'style', 'aria-label'],
 });
-
-// Periodic nudge when controls are hidden
-setInterval(nudgeIfHidden, 1000);
