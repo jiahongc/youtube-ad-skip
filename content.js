@@ -1,31 +1,33 @@
-// YouTube Auto Skip Promotions
-// Watches for YouTube's native skip button (paid promotions / intros) and clicks it automatically.
+// YouTube Auto Skip — auto-clicks "Jump ahead" and other native skip buttons.
 
-// Known selectors for YouTube's skip buttons
+// Known selectors (best-effort; YouTube changes these periodically)
 const SKIP_SELECTORS = [
-  '.ytp-skip-intro-button',        // Skip intro (chapters feature)
-  '.ytp-ad-skip-button',           // Skippable pre-roll ads
-  '.ytp-skip-ad-button',           // Alt ad skip class
+  '.ytp-jump-ahead-button',           // Jump ahead (guessed from ytp- naming convention)
+  '.ytp-skip-intro-button',           // Skip intro (chapters)
+  '.ytp-ad-skip-button',              // Skippable pre-roll ads
+  '.ytp-skip-ad-button',              // Alt ad skip class
   'button.ytp-ad-skip-button-modern', // Modern ad skip variant
 ];
 
-// Fallback: find any visible button inside the player that says "Skip"
-function findSkipButtonByText() {
+// Text patterns to match against button labels
+const SKIP_TEXT = /jump ahead|skip/i;
+
+// Find any visible button inside the player whose label matches
+function findButtonByText() {
   const player = document.querySelector('#movie_player, .html5-video-player');
   if (!player) return null;
 
-  const buttons = player.querySelectorAll('button, .ytp-button');
-  for (const btn of buttons) {
-    const text = btn.innerText || btn.textContent || '';
-    if (/skip/i.test(text) && btn.offsetParent !== null) {
-      return btn;
+  for (const el of player.querySelectorAll('button, [role="button"]')) {
+    const text = el.innerText || el.textContent || '';
+    if (SKIP_TEXT.test(text) && el.offsetParent !== null) {
+      return el;
     }
   }
   return null;
 }
 
-function tryClickSkip() {
-  // Try known selectors first
+function tryClick() {
+  // Try known selectors first (faster)
   for (const selector of SKIP_SELECTORS) {
     const btn = document.querySelector(selector);
     if (btn && btn.offsetParent !== null) {
@@ -35,17 +37,16 @@ function tryClickSkip() {
     }
   }
 
-  // Fallback: text-based search within the player
-  const btn = findSkipButtonByText();
+  // Fallback: search by button text ("Jump ahead", "Skip", etc.)
+  const btn = findButtonByText();
   if (btn) {
     btn.click();
-    console.log('[AutoSkip] Clicked skip button by text match');
+    console.log('[AutoSkip] Clicked by text:', btn.innerText.trim());
   }
 }
 
-// MutationObserver reacts immediately when the button appears
-const observer = new MutationObserver(tryClickSkip);
-
+// React immediately when the DOM changes
+const observer = new MutationObserver(tryClick);
 observer.observe(document.body, {
   childList: true,
   subtree: true,
@@ -54,4 +55,4 @@ observer.observe(document.body, {
 });
 
 // Polling fallback every 500ms
-setInterval(tryClickSkip, 500);
+setInterval(tryClick, 500);
