@@ -136,6 +136,11 @@
     handler = () => {
       const ms = video.currentTime * 1000;
 
+      // Re-arm if user seeked back before a segment's trigger
+      for (const seg of activeSegments) {
+        if (seg.done && ms < seg.triggerMs) seg.done = false;
+      }
+
       // Status log every 30s
       if (ms - lastLogTime > 30000) {
         lastLogTime = ms;
