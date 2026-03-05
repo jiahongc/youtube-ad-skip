@@ -6,6 +6,10 @@
   'use strict';
 
   console.log('[AutoSkip] injected.js loaded');
+  const settings = {
+    skipJumpAhead: true,
+    skipAdChapter: true,
+  };
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -44,8 +48,38 @@
     for (const v of Object.values(node)) collectChapterLists(v, out, (depth || 0) + 1, seen);
   }
 
-  // Chapter titles that indicate a break/sponsored section to skip
-  const BREAK_PATTERN = /\b(ad|ads|ad[- ]?break|break|sponsor(?:ed|ship)?|paid|promo(?:tion)?|commercial|message from|word from)\b/i;
+  // Chapter title matching: strong ad signals + weak signals with context,
+  // while excluding common non-ad uses of "break".
+  const AD_STRONG_PATTERN = /\b(ad(?:vert(?:isement)?)?\s*break|commercial(?:\s*break)?|sponsor(?:ed|ship)?(?:\s*(?:segment|section|message))?|paid\s*(?:promotion|partnership)|brought to you by|in partnership with|brand deal|promo(?:tion)?)\b/i;
+  const AD_WEAK_PATTERN = /\b(partner(?:ship)?|message from|word from|thanks to)\b/i;
+  const AD_CONTEXT_PATTERN = /\b(sponsor|promo|paid|commercial|advert(?:isement)?)\b/i;
+  const AD_EXCLUDE_PATTERN = /\b(spring break|coffee break|breakdown|adventure)\b/i;
+
+  function isAdChapterTitle(title) {
+    if (!title) return false;
+    if (AD_EXCLUDE_PATTERN.test(title)) return false;
+    if (AD_STRONG_PATTERN.test(title)) return true;
+    return AD_WEAK_PATTERN.test(title) && AD_CONTEXT_PATTERN.test(title);
+  }
+
+  function applySettings(next) {
+    const normalized = {
+      skipJumpAhead: next?.skipJumpAhead !== false,
+      skipAdChapter: next?.skipAdChapter !== false,
+    };
+    const changed = normalized.skipJumpAhead !== settings.skipJumpAhead ||
+      normalized.skipAdChapter !== settings.skipAdChapter;
+
+    settings.skipJumpAhead = normalized.skipJumpAhead;
+    settings.skipAdChapter = normalized.skipAdChapter;
+    if (!changed) return;
+
+    console.log('[AutoSkip] Settings updated:', settings);
+    reset();
+    const data = getPageData();
+    if (data) process(data);
+    attachHandlerIfReady();
+  }
 
   // ── Extract Jump ahead segments ──────────────────────────────────────────
 
@@ -109,7 +143,7 @@
 
       for (let i = 0; i < chapters.length; i++) {
         const ch = chapters[i];
-        if (!BREAK_PATTERN.test(ch.title)) continue;
+        if (!isAdChapterTitle(ch.title)) continue;
 
         const nextChapter = chapters[i + 1];
         if (!nextChapter) continue;
@@ -216,10 +250,10 @@
   // ── Process a data payload ───────────────────────────────────────────────
 
   function process(data) {
-    const jumpAhead = extractJumpAheadSegments(data);
+    const jumpAhead = settings.skipJumpAhead ? extractJumpAheadSegments(data) : [];
     let chapters = [];
     try {
-      chapters = extractChapterSegments(data);
+      chapters = settings.skipAdChapter ? extractChapterSegments(data) : [];
     } catch (e) {
       console.log('[AutoSkip] Chapter extraction error:', e);
     }
@@ -283,6 +317,13 @@
     if (activeSegments.length && !handler) attachHandlerIfReady();
   });
   rootObserver.observe(document.documentElement || document, { childList: true, subtree: true });
+
+  window.addEventListener('message', (e) => {
+    if (e.source !== window) return;
+    if (e.data?.source !== 'autoskip-config') return;
+    if (e.data?.type !== 'settings') return;
+    applySettings(e.data.settings);
+  });
 
   // 3. Intercept /next API responses
   const origFetch = window.fetch;

@@ -1,6 +1,13 @@
 // YouTube Auto Skip — content script (ISOLATED world).
-// Receives skip notifications from injected.js (MAIN world) and shows toast.
-// Also has MutationObserver fallback for when user moves mouse naturally.
+// Receives skip notifications from injected.js (MAIN world), shows toast,
+// and forwards toggle settings from extension storage to injected.js.
+
+const DEFAULT_SETTINGS = {
+  skipJumpAhead: true,
+  skipAdChapter: true,
+};
+
+let settings = { ...DEFAULT_SETTINGS };
 
 const SKIP_SELECTORS = [
   '[aria-label="Jump ahead"]',
@@ -17,6 +24,43 @@ function isVisible(el) {
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
 }
+
+function postSettingsToPage() {
+  window.postMessage({
+    source: 'autoskip-config',
+    type: 'settings',
+    settings,
+  }, '*');
+}
+
+async function loadSettings() {
+  try {
+    const stored = await chrome.storage.sync.get(DEFAULT_SETTINGS);
+    settings = {
+      skipJumpAhead: stored.skipJumpAhead !== false,
+      skipAdChapter: stored.skipAdChapter !== false,
+    };
+  } catch (_) {
+    settings = { ...DEFAULT_SETTINGS };
+  }
+  postSettingsToPage();
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync') return;
+  let changed = false;
+
+  if (changes.skipJumpAhead) {
+    settings.skipJumpAhead = changes.skipJumpAhead.newValue !== false;
+    changed = true;
+  }
+  if (changes.skipAdChapter) {
+    settings.skipAdChapter = changes.skipAdChapter.newValue !== false;
+    changed = true;
+  }
+
+  if (changed) postSettingsToPage();
+});
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
@@ -46,9 +90,10 @@ function showToast(msg) {
   t._t = setTimeout(() => (t.style.opacity = '0'), 4000);
 }
 
-// ── Listen for messages from injected.js ──────────────────────────────────
+// ── Listen for skip notifications from injected.js ───────────────────────
 
 window.addEventListener('message', (e) => {
+  if (e.source !== window) return;
   if (e.data?.source !== 'autoskip') return;
 
   if (e.data.type === 'skipped') {
@@ -57,11 +102,12 @@ window.addEventListener('message', (e) => {
   }
 });
 
-// ── MutationObserver fallback — click button when user moves mouse ────────
+// ── MutationObserver fallback — click skip/jump button ───────────────────
 
 let lastClick = 0;
 
 function tryClick() {
+  if (!settings.skipJumpAhead) return;
   if (Date.now() - lastClick < 800) return;
 
   for (const sel of SKIP_SELECTORS) {
@@ -99,9 +145,24 @@ function clickBtn(btn, label) {
 }
 
 const observer = new MutationObserver(() => tryClick());
-observer.observe(document.body, {
-  childList: true,
-  subtree: true,
-  attributes: true,
-  attributeFilter: ['class', 'style', 'aria-label'],
-});
+if (document.body) {
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style', 'aria-label'],
+  });
+} else {
+  window.addEventListener('DOMContentLoaded', () => {
+    if (document.body) {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style', 'aria-label'],
+      });
+    }
+  }, { once: true });
+}
+
+loadSettings();

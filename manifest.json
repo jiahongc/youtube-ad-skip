@@ -3,6 +3,10 @@
   "name": "YouTube Auto Skip Promotions",
   "version": "1.4",
   "description": "Automatically skips Jump ahead promotions and ad/break chapters in YouTube videos.",
+  "permissions": ["storage"],
+  "action": {
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*"],
