@@ -8,6 +8,7 @@ const DEFAULT_SETTINGS = {
 };
 
 let settings = { ...DEFAULT_SETTINGS };
+let musicVideoBlocked = false;
 
 const SKIP_SELECTORS = [
   '[aria-label="Jump ahead"]',
@@ -23,6 +24,11 @@ const SKIP_TEXT = /^jump ahead$|^skip/i;
 function isVisible(el) {
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
+}
+
+function isLikelyMusicVideoByDom() {
+  const genre = document.querySelector('meta[itemprop="genre"]')?.getAttribute('content') || '';
+  return /\bmusic\b/i.test(genre);
 }
 
 function postSettingsToPage() {
@@ -99,6 +105,11 @@ window.addEventListener('message', (e) => {
   if (e.data.type === 'skipped') {
     const { seconds: sec, label } = e.data;
     showToast(sec > 0 ? `${label} · ${sec}s skipped` : label);
+    return;
+  }
+
+  if (e.data.type === 'music-video-state') {
+    musicVideoBlocked = Boolean(e.data.isMusicVideo);
   }
 });
 
@@ -108,6 +119,7 @@ let lastClick = 0;
 
 function tryClick() {
   if (!settings.skipJumpAhead) return;
+  if (musicVideoBlocked || isLikelyMusicVideoByDom()) return;
   if (Date.now() - lastClick < 800) return;
 
   for (const sel of SKIP_SELECTORS) {

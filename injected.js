@@ -29,6 +29,12 @@
     return null;
   }
 
+  function getPlayerResponse() {
+    if (window.ytInitialPlayerResponse) return window.ytInitialPlayerResponse;
+    try { return window.ytcfg?.get?.('PLAYER_RESPONSE'); } catch (_) {}
+    return null;
+  }
+
   function collectChapterLists(node, out, depth, seen) {
     if (!node || typeof node !== 'object' || (depth || 0) > 20) return;
     if (!seen) seen = new WeakSet();
@@ -46,6 +52,48 @@
     }
 
     for (const v of Object.values(node)) collectChapterLists(v, out, (depth || 0) + 1, seen);
+  }
+
+  const MUSIC_TITLE_PATTERN = /\b(official music video|music video|lyric video|official audio|visualizer)\b/i;
+  const MUSIC_CHANNEL_PATTERN = /\bofficial artist channel\b/i;
+  let isMusicVideo = false;
+  let hasSentMusicState = false;
+
+  function isLikelyMusicVideoByMetadata() {
+    const player = getPlayerResponse();
+    if (!player || typeof player !== 'object') return false;
+
+    const category = player?.microformat?.playerMicroformatRenderer?.category || '';
+    if (typeof category === 'string' && category.toLowerCase() === 'music') return true;
+
+    const title = player?.videoDetails?.title || '';
+    const owner = player?.videoDetails?.author || '';
+    const keywords = Array.isArray(player?.videoDetails?.keywords) ? player.videoDetails.keywords.join(' ') : '';
+
+    let weakSignals = 0;
+    if (MUSIC_TITLE_PATTERN.test(title)) weakSignals++;
+    if (MUSIC_CHANNEL_PATTERN.test(owner)) weakSignals++;
+    if (/\b(lyrics?|official audio|visualizer)\b/i.test(keywords)) weakSignals++;
+    return weakSignals >= 2;
+  }
+
+  function isLikelyMusicVideoByDom() {
+    const genre = document.querySelector('meta[itemprop="genre"]')?.getAttribute('content') || '';
+    return /\bmusic\b/i.test(genre);
+  }
+
+  function refreshMusicGuard() {
+    const nextIsMusic = isLikelyMusicVideoByMetadata() || isLikelyMusicVideoByDom();
+    const changed = nextIsMusic !== isMusicVideo;
+    isMusicVideo = nextIsMusic;
+
+    if (changed || !hasSentMusicState) {
+      hasSentMusicState = true;
+      window.postMessage({ source: 'autoskip', type: 'music-video-state', isMusicVideo }, '*');
+      console.log('[AutoSkip] Music guard:', isMusicVideo ? 'blocking skips for music video' : 'skip eligible');
+    }
+
+    if (changed && isMusicVideo) reset();
   }
 
   // Chapter title matching: strong ad signals + weak signals with context,
@@ -179,6 +227,7 @@
     }
 
     handler = () => {
+      if (isMusicVideo) return;
       const ms = video.currentTime * 1000;
 
       // Re-arm if user seeked back before a segment's trigger
@@ -250,6 +299,9 @@
   // ── Process a data payload ───────────────────────────────────────────────
 
   function process(data) {
+    refreshMusicGuard();
+    if (isMusicVideo) return;
+
     const jumpAhead = settings.skipJumpAhead ? extractJumpAheadSegments(data) : [];
     let chapters = [];
     try {
@@ -275,6 +327,9 @@
 
   // ── Triggers ─────────────────────────────────────────────────────────────
 
+  // Publish initial music guard state as soon as possible.
+  refreshMusicGuard();
+
   // 1. Initial page load — poll for ytInitialData
   let attempts = 0;
   const poll = setInterval(() => {
@@ -294,6 +349,7 @@
   document.addEventListener('yt-navigate-finish', () => {
     console.log('[AutoSkip] Navigation - resetting');
     reset();
+    refreshMusicGuard();
     const immediate = getPageData();
     if (immediate) {
       process(immediate);
