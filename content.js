@@ -12,7 +12,6 @@ const SKIP_SELECTORS = [
 
 const SKIP_TEXT = /^jump ahead$|^skip/i;
 
-// offsetParent is null for position:fixed/absolute overlays — use getBoundingClientRect instead
 function isVisible(el) {
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
@@ -29,23 +28,23 @@ function showToast(label) {
     toast = document.createElement('div');
     toast.id = 'autoskip-toast';
     Object.assign(toast.style, {
-      position:       'absolute',
-      bottom:         '64px',
-      left:           '50%',
-      transform:      'translateX(-50%)',
-      background:     'rgba(0,0,0,0.78)',
-      color:          '#fff',
-      padding:        '7px 16px',
-      borderRadius:   '20px',
-      fontSize:       '14px',
-      fontFamily:     'Roboto, sans-serif',
-      fontWeight:     '500',
-      letterSpacing:  '0.01em',
-      zIndex:         '9999',
-      pointerEvents:  'none',
-      opacity:        '0',
-      transition:     'opacity 0.15s ease',
-      whiteSpace:     'nowrap',
+      position:      'absolute',
+      bottom:        '64px',
+      left:          '50%',
+      transform:     'translateX(-50%)',
+      background:    'rgba(0,0,0,0.78)',
+      color:         '#fff',
+      padding:       '7px 16px',
+      borderRadius:  '20px',
+      fontSize:      '14px',
+      fontFamily:    'Roboto, sans-serif',
+      fontWeight:    '500',
+      letterSpacing: '0.01em',
+      zIndex:        '9999',
+      pointerEvents: 'none',
+      opacity:       '0',
+      transition:    'opacity 0.15s ease',
+      whiteSpace:    'nowrap',
     });
     player.appendChild(toast);
   }
@@ -67,7 +66,6 @@ function clickAndNotify(btn, label) {
   btn.click();
   lastClick = Date.now();
 
-  // Measure how many seconds were actually skipped
   setTimeout(() => {
     if (video && timeBefore !== null) {
       const skipped = Math.round(video.currentTime - timeBefore);
@@ -81,7 +79,7 @@ function clickAndNotify(btn, label) {
 }
 
 function tryClick() {
-  if (Date.now() - lastClick < 800) return; // debounce
+  if (Date.now() - lastClick < 800) return;
 
   for (const selector of SKIP_SELECTORS) {
     const btn = document.querySelector(selector);
@@ -92,7 +90,6 @@ function tryClick() {
     }
   }
 
-  // Last resort: search by visible text inside the player
   const player = document.querySelector('#movie_player, .html5-video-player');
   if (!player) return;
   for (const el of player.querySelectorAll('button, [role="button"]')) {
@@ -104,8 +101,38 @@ function tryClick() {
   }
 }
 
+// ── Smart nudge ───────────────────────────────────────────────────────────────
+// Only nudge when controls are already hidden (ytp-autohide on the player).
+// Immediately re-add ytp-autohide after the check so controls collapse again
+// instead of staying visible for YouTube's full 3-second idle timer.
+
+function nudgeIfHidden() {
+  const player = document.querySelector('#movie_player, .html5-video-player');
+  if (!player) return;
+
+  const video = document.querySelector('video');
+  if (!video || video.paused) return; // no need to nudge when paused
+
+  // If controls are already visible the user is interacting — MutationObserver handles it
+  if (!player.classList.contains('ytp-autohide')) return;
+
+  const r = player.getBoundingClientRect();
+  player.dispatchEvent(new MouseEvent('mousemove', {
+    bubbles: true, cancelable: true, view: window,
+    clientX: r.left + r.width / 2,
+    clientY: r.top + r.height / 2,
+  }));
+
+  // Give YouTube ~300ms to render the button, then click + re-hide immediately
+  setTimeout(() => {
+    tryClick();
+    player.classList.add('ytp-autohide');
+  }, 300);
+}
+
 // ── Observers ─────────────────────────────────────────────────────────────────
 
+// React instantly when button appears while user is already interacting
 const observer = new MutationObserver(tryClick);
 observer.observe(document.body, {
   childList: true,
@@ -114,19 +141,5 @@ observer.observe(document.body, {
   attributeFilter: ['class', 'style', 'aria-label'],
 });
 
-// Periodically nudge the player with a synthetic mousemove so YouTube reveals
-// the Jump ahead button even when the user isn't moving their mouse.
-function nudgePlayer() {
-  const player = document.querySelector('#movie_player, .html5-video-player');
-  if (!player) return;
-  const r = player.getBoundingClientRect();
-  player.dispatchEvent(new MouseEvent('mousemove', {
-    bubbles: true,
-    cancelable: true,
-    view: window,
-    clientX: r.left + r.width / 2,
-    clientY: r.top + r.height / 2,
-  }));
-}
-
-setInterval(() => { nudgePlayer(); tryClick(); }, 500);
+// Periodic nudge when controls are hidden
+setInterval(nudgeIfHidden, 1000);
