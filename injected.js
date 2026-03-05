@@ -223,7 +223,7 @@
     } else if (attempts > 50) {
       clearInterval(poll);
     }
-  }, 200); // faster polling: 200ms instead of 300ms
+  }, 200);
 
   // 2. SPA navigation — try immediately, then retry at 500ms + 1500ms
   document.addEventListener('yt-navigate-finish', () => {

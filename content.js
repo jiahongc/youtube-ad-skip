@@ -52,12 +52,8 @@ window.addEventListener('message', (e) => {
   if (e.data?.source !== 'autoskip') return;
 
   if (e.data.type === 'skipped') {
-    const sec = e.data.seconds;
-    if (sec > 0) {
-      showToast(`Jump ahead · ${sec}s skipped`);
-    } else {
-      showToast('Jump ahead');
-    }
+    const { seconds: sec, label } = e.data;
+    showToast(sec > 0 ? `${label} · ${sec}s skipped` : label);
   }
 });
 

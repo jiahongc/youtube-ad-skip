@@ -1,9 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YouTube Auto Skip Promotions",
-  "version": "1.3",
-  "description": "Automatically skips commonly-skipped sections (Jump ahead) in YouTube videos.",
-  "permissions": [],
+  "version": "1.4",
+  "description": "Automatically skips Jump ahead promotions and ad/break chapters in YouTube videos.",
   "content_scripts": [
     {
       "matches": ["*://www.youtube.com/*"],
