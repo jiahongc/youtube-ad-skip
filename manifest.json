@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Auto Skip Promotions",
+  "name": "Youtube Skip In-Video Ads",
   "version": "1.4",
   "description": "Automatically skips Jump ahead promotions and ad/break chapters in YouTube videos.",
   "permissions": ["storage"],
