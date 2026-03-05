@@ -1,7 +1,6 @@
 // YouTube Auto Skip — content script (ISOLATED world).
-// Strategy 1: Auto-seek using timestamps from injected.js
-// Strategy 2: Targeted nudge at skip-point timestamp to reveal + click button
-// Strategy 3: MutationObserver fallback when user moves mouse naturally
+// Receives skip notifications from injected.js (MAIN world) and shows toast.
+// Also has MutationObserver fallback for when user moves mouse naturally.
 
 const SKIP_SELECTORS = [
   '[aria-label="Jump ahead"]',
@@ -47,31 +46,45 @@ function showToast(msg) {
   t._t = setTimeout(() => (t.style.opacity = '0'), 4000);
 }
 
-// ── Button clicking ───────────────────────────────────────────────────────────
+// ── Listen for messages from injected.js ──────────────────────────────────
+
+window.addEventListener('message', (e) => {
+  if (e.data?.source !== 'autoskip') return;
+
+  if (e.data.type === 'skipped') {
+    const sec = e.data.seconds;
+    if (sec > 0) {
+      showToast(`Jump ahead · ${sec}s skipped`);
+    } else {
+      showToast('Jump ahead');
+    }
+  }
+});
+
+// ── MutationObserver fallback — click button when user moves mouse ────────
 
 let lastClick = 0;
 
 function tryClick() {
-  if (Date.now() - lastClick < 800) return false;
+  if (Date.now() - lastClick < 800) return;
 
   for (const sel of SKIP_SELECTORS) {
     const btn = document.querySelector(sel);
     if (btn && isVisible(btn)) {
       clickBtn(btn, btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead');
-      return true;
+      return;
     }
   }
 
   const player = document.querySelector('#movie_player, .html5-video-player');
-  if (!player) return false;
+  if (!player) return;
   for (const el of player.querySelectorAll('button, [role="button"]')) {
     const text = (el.innerText || el.textContent || '').trim();
     if (SKIP_TEXT.test(text) && isVisible(el)) {
       clickBtn(el, text);
-      return true;
+      return;
     }
   }
-  return false;
 }
 
 function clickBtn(btn, label) {
@@ -88,78 +101,6 @@ function clickBtn(btn, label) {
     }
   }, 300);
 }
-
-// ── Targeted nudge — only at the exact skip-point timestamp ───────────────
-
-function nudgeOnce() {
-  const player = document.querySelector('#movie_player, .html5-video-player');
-  if (!player) return;
-
-  const r = player.getBoundingClientRect();
-  player.dispatchEvent(new MouseEvent('mousemove', {
-    bubbles: true, cancelable: true, view: window,
-    clientX: r.left + r.width / 2,
-    clientY: r.top + r.height / 2,
-  }));
-
-  // Check for button + re-hide controls quickly
-  setTimeout(() => {
-    tryClick();
-    player.classList.add('ytp-autohide');
-  }, 400);
-}
-
-// ── Strategy 1 & 2: Handle segments from injected.js ─────────────────────
-
-let activeHandler = null;
-
-window.addEventListener('message', (e) => {
-  if (e.data?.source !== 'autoskip' || e.data?.type !== 'segments') return;
-  setupAutoSeek(e.data.segments);
-});
-
-function setupAutoSeek(segments) {
-  if (!segments?.length) return;
-
-  const video = document.querySelector('video');
-  if (!video) return;
-
-  if (activeHandler) video.removeEventListener('timeupdate', activeHandler);
-
-  const handled = new Set();
-
-  activeHandler = () => {
-    const ms = video.currentTime * 1000;
-    for (const seg of segments) {
-      const key = `${seg.startMs}`;
-      if (handled.has(key)) continue;
-
-      // Within 2 seconds of the skip point
-      if (ms >= seg.startMs - 500 && ms < seg.startMs + 2000) {
-        handled.add(key);
-
-        if (seg.endMs > 0) {
-          // Strategy 1: We know the end time — seek directly
-          const skipSec = Math.round((seg.endMs - seg.startMs) / 1000);
-          video.currentTime = seg.endMs / 1000;
-          showToast(`Jump ahead · ${skipSec}s skipped`);
-          console.log('[AutoSkip] Seeked to', seg.endMs, 'ms');
-        } else {
-          // Strategy 2: Duration is 0, we only know the start.
-          // Do a targeted nudge RIGHT NOW to make the button appear, then click it.
-          console.log('[AutoSkip] At skip point', seg.startMs, 'ms — nudging to reveal button');
-          nudgeOnce();
-        }
-        break;
-      }
-    }
-  };
-
-  video.addEventListener('timeupdate', activeHandler);
-  console.log('[AutoSkip] Armed for', segments.length, 'segment(s):', segments);
-}
-
-// ── Strategy 3: MutationObserver — catches button if user moves mouse ─────
 
 const observer = new MutationObserver(() => tryClick());
 observer.observe(document.body, {
