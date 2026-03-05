@@ -19,18 +19,29 @@
     return null;
   }
 
-  function findAllDeep(obj, key, out, depth) {
-    if (!obj || typeof obj !== 'object' || (depth || 0) > 20) return out;
-    out = out || [];
-    if (obj[key] !== undefined) out.push(obj[key]);
-    for (const v of Object.values(obj)) findAllDeep(v, key, out, (depth || 0) + 1);
-    return out;
-  }
-
   function getPageData() {
     if (window.ytInitialData) return window.ytInitialData;
     try { return window.ytcfg?.get?.('INITIAL_DATA'); } catch (_) {}
     return null;
+  }
+
+  function collectChapterLists(node, out, depth, seen) {
+    if (!node || typeof node !== 'object' || (depth || 0) > 20) return;
+    if (!seen) seen = new WeakSet();
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    if (node.chapterRenderer && typeof node.chapterRenderer === 'object') {
+      out.push([node.chapterRenderer]);
+      return;
+    }
+
+    if (Array.isArray(node) && node.length && node.every(item => item?.chapterRenderer)) {
+      out.push(node.map(item => item.chapterRenderer));
+      return;
+    }
+
+    for (const v of Object.values(node)) collectChapterLists(v, out, (depth || 0) + 1, seen);
   }
 
   // Chapter titles that indicate a break/sponsored section to skip
@@ -39,11 +50,12 @@
   // ── Extract Jump ahead segments ──────────────────────────────────────────
 
   function extractJumpAheadSegments(data) {
-    const timely = findDeep(data, 'timelyActionsOverlayViewModel');
-    if (!timely?.timelyActionsOverlayViewModel?.timelyActions) return [];
+    const timelyVm = findDeep(data, 'timelyActionsOverlayViewModel');
+    const timelyActions = timelyVm?.timelyActions || timelyVm?.timelyActionsOverlayViewModel?.timelyActions;
+    if (!Array.isArray(timelyActions)) return [];
 
     const segments = [];
-    for (const action of timely.timelyActionsOverlayViewModel.timelyActions) {
+    for (const action of timelyActions) {
       const vm = action?.timelyActionViewModel;
       if (!vm) continue;
       if (vm.content?.buttonViewModel?.title !== 'Jump ahead') continue;
@@ -65,8 +77,8 @@
 
       if (seekTargetMs && seekTargetMs > triggerMs) {
         segments.push({ label: 'Jump ahead', triggerMs, seekTargetMs });
-        console.log('[AutoSkip] Jump ahead: trigger', (triggerMs/1000).toFixed(1) + 's →',
-          (seekTargetMs/1000).toFixed(1) + 's (' + Math.round((seekTargetMs-triggerMs)/1000) + 's)');
+        console.log('[AutoSkip] Jump ahead: trigger', (triggerMs / 1000).toFixed(1) + 's ->',
+          (seekTargetMs / 1000).toFixed(1) + 's (' + Math.round((seekTargetMs - triggerMs) / 1000) + 's)');
       }
     }
     return segments;
@@ -77,36 +89,39 @@
   function extractChapterSegments(data) {
     const segments = [];
 
-    // Chapters can live in multiple places in YouTube's data
-    const allChapters = findAllDeep(data, 'chapterRenderer');
-    if (!allChapters?.length) return segments;
+    // Keep chapter collections separate so "next chapter" stays in the same list.
+    const chapterLists = [];
+    collectChapterLists(data, chapterLists, 0, new WeakSet());
+    if (!chapterLists.length) return segments;
 
-    // Sort by start time
-    const chapters = allChapters
-      .map(c => ({
-        title: c.title?.simpleText || c.title?.runs?.[0]?.text || '',
-        startMs: parseInt(c.timeRangeStartMillis, 10),
-      }))
-      .filter(c => !isNaN(c.startMs))
-      .sort((a, b) => a.startMs - b.startMs);
+    for (const rawList of chapterLists) {
+      const chapters = rawList
+        .map(c => ({
+          title: c.title?.simpleText || c.title?.runs?.[0]?.text || '',
+          startMs: parseInt(c.timeRangeStartMillis, 10),
+        }))
+        .filter(c => !isNaN(c.startMs))
+        .sort((a, b) => a.startMs - b.startMs);
 
-    console.log('[AutoSkip] Chapters found:', chapters.map(c => `"${c.title}" @${(c.startMs/1000).toFixed(0)}s`).join(', '));
+      if (!chapters.length) continue;
 
-    for (let i = 0; i < chapters.length; i++) {
-      const ch = chapters[i];
-      if (!BREAK_PATTERN.test(ch.title)) continue;
+      console.log('[AutoSkip] Chapters found:', chapters.map(c => '"' + c.title + '" @' + (c.startMs / 1000).toFixed(0) + 's').join(', '));
 
-      // Seek target is the start of the NEXT chapter
-      const nextChapter = chapters[i + 1];
-      if (!nextChapter) continue; // last chapter — can't determine end
+      for (let i = 0; i < chapters.length; i++) {
+        const ch = chapters[i];
+        if (!BREAK_PATTERN.test(ch.title)) continue;
 
-      segments.push({
-        label: `"${ch.title}"`,
-        triggerMs: ch.startMs,
-        seekTargetMs: nextChapter.startMs,
-      });
-      console.log('[AutoSkip] Break chapter:', `"${ch.title}"`,
-        (ch.startMs/1000).toFixed(1) + 's →', (nextChapter.startMs/1000).toFixed(1) + 's');
+        const nextChapter = chapters[i + 1];
+        if (!nextChapter) continue;
+
+        segments.push({
+          label: '"' + ch.title + '"',
+          triggerMs: ch.startMs,
+          seekTargetMs: nextChapter.startMs,
+        });
+        console.log('[AutoSkip] Break chapter:', '"' + ch.title + '"',
+          (ch.startMs / 1000).toFixed(1) + 's ->', (nextChapter.startMs / 1000).toFixed(1) + 's');
+      }
     }
 
     return segments;
@@ -116,22 +131,18 @@
 
   let activeSegments = [];
   let handler = null;
+  let attachedVideo = null;
   let lastLogTime = -99999;
 
-  function armSkip(newSegments) {
-    if (!newSegments.length) return;
-
+  function attachHandlerIfReady() {
     const video = document.querySelector('video');
-    if (!video) { console.log('[AutoSkip] No <video> found'); return; }
+    if (!video) return false;
 
-    // Merge, avoiding duplicates
-    for (const seg of newSegments) {
-      if (!activeSegments.some(s => s.triggerMs === seg.triggerMs)) {
-        activeSegments.push({ ...seg, done: false });
-      }
+    if (handler && attachedVideo === video) return true;
+
+    if (handler && attachedVideo) {
+      attachedVideo.removeEventListener('timeupdate', handler);
     }
-
-    if (handler) return; // already attached
 
     handler = () => {
       const ms = video.currentTime * 1000;
@@ -146,8 +157,8 @@
         lastLogTime = ms;
         const pending = activeSegments.filter(s => !s.done);
         if (pending.length) {
-          console.log('[AutoSkip] ▶ At', (ms/1000).toFixed(1) + 's |',
-            pending.map(s => s.label + ' @' + (s.triggerMs/1000).toFixed(1) + 's').join(', '));
+          console.log('[AutoSkip] At', (ms / 1000).toFixed(1) + 's |',
+            pending.map(s => s.label + ' @' + (s.triggerMs / 1000).toFixed(1) + 's').join(', '));
         }
       }
 
@@ -155,8 +166,8 @@
         if (seg.done) continue;
         // Trigger anywhere between start and end of the skip zone
         if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
-          console.log('[AutoSkip] ⏭ Skipping', seg.label, 'at',
-            (ms/1000).toFixed(1) + 's → ' + (seg.seekTargetMs/1000).toFixed(1) + 's');
+          console.log('[AutoSkip] Skipping', seg.label, 'at',
+            (ms / 1000).toFixed(1) + 's -> ' + (seg.seekTargetMs / 1000).toFixed(1) + 's');
 
           const player = document.querySelector('#movie_player');
           if (player && typeof player.seekTo === 'function') {
@@ -170,10 +181,10 @@
             if (after >= seg.seekTargetMs - 2000) {
               seg.done = true;
               const skipSec = Math.round((seg.seekTargetMs - seg.triggerMs) / 1000);
-              console.log('[AutoSkip] ✓ Confirmed at', (after/1000).toFixed(1) + 's');
+              console.log('[AutoSkip] Confirmed at', (after / 1000).toFixed(1) + 's');
               window.postMessage({ source: 'autoskip', type: 'skipped', seconds: skipSec, label: seg.label }, '*');
             } else {
-              console.log('[AutoSkip] ✗ Seek failed, retrying...');
+              console.log('[AutoSkip] Seek failed, retrying...');
             }
           }, 500);
           break;
@@ -182,7 +193,24 @@
     };
 
     video.addEventListener('timeupdate', handler);
+    attachedVideo = video;
     console.log('[AutoSkip] Handler attached |', activeSegments.length, 'segment(s)');
+    return true;
+  }
+
+  function armSkip(newSegments) {
+    if (!newSegments.length) return;
+
+    // Merge, avoiding duplicates by full skip window and label.
+    for (const seg of newSegments) {
+      if (!activeSegments.some(s => s.triggerMs === seg.triggerMs && s.seekTargetMs === seg.seekTargetMs && s.label === seg.label)) {
+        activeSegments.push({ ...seg, done: false });
+      }
+    }
+
+    if (!attachHandlerIfReady()) {
+      console.log('[AutoSkip] No <video> found yet; will attach when ready');
+    }
   }
 
   // ── Process a data payload ───────────────────────────────────────────────
@@ -190,7 +218,9 @@
   function process(data) {
     const jumpAhead = extractJumpAheadSegments(data);
     let chapters = [];
-    try { chapters = extractChapterSegments(data); } catch (e) {
+    try {
+      chapters = extractChapterSegments(data);
+    } catch (e) {
       console.log('[AutoSkip] Chapter extraction error:', e);
     }
     const all = [...jumpAhead, ...chapters];
@@ -202,11 +232,11 @@
   function reset() {
     activeSegments = [];
     lastLogTime = -99999;
-    if (handler) {
-      const video = document.querySelector('video');
-      if (video) video.removeEventListener('timeupdate', handler);
-      handler = null;
+    if (handler && attachedVideo) {
+      attachedVideo.removeEventListener('timeupdate', handler);
     }
+    handler = null;
+    attachedVideo = null;
   }
 
   // ── Triggers ─────────────────────────────────────────────────────────────
@@ -220,6 +250,7 @@
       clearInterval(poll);
       console.log('[AutoSkip] Page data found (attempt ' + attempts + ')');
       process(data);
+      attachHandlerIfReady();
     } else if (attempts > 50) {
       clearInterval(poll);
     }
@@ -227,15 +258,31 @@
 
   // 2. SPA navigation — try immediately, then retry at 500ms + 1500ms
   document.addEventListener('yt-navigate-finish', () => {
-    console.log('[AutoSkip] Navigation — resetting');
+    console.log('[AutoSkip] Navigation - resetting');
     reset();
-    // Try immediately (ytInitialData may already be updated)
     const immediate = getPageData();
-    if (immediate) { process(immediate); return; }
-    // Retry with short delays
-    setTimeout(() => { const d = getPageData(); if (d) process(d); }, 500);
-    setTimeout(() => { const d = getPageData(); if (d) process(d); }, 1500);
+    if (immediate) {
+      process(immediate);
+      attachHandlerIfReady();
+      return;
+    }
+    setTimeout(() => {
+      const d = getPageData();
+      if (d) process(d);
+      attachHandlerIfReady();
+    }, 500);
+    setTimeout(() => {
+      const d = getPageData();
+      if (d) process(d);
+      attachHandlerIfReady();
+    }, 1500);
   });
+
+  // Keep trying to attach if segments are known but the video element appears later.
+  const rootObserver = new MutationObserver(() => {
+    if (activeSegments.length && !handler) attachHandlerIfReady();
+  });
+  rootObserver.observe(document.documentElement || document, { childList: true, subtree: true });
 
   // 3. Intercept /next API responses
   const origFetch = window.fetch;
@@ -247,6 +294,7 @@
         resp.clone().json().then(d => {
           console.log('[AutoSkip] Intercepted /next');
           process(d);
+          attachHandlerIfReady();
         }).catch(() => {});
       }
     } catch (_) {}
