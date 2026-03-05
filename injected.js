@@ -111,8 +111,9 @@
       for (const seg of activeSegments) {
         if (seg.done) continue;
 
-        // Wide trigger window: from trigger point to trigger + 5s
-        if (ms >= seg.triggerMs && ms < seg.triggerMs + 5000) {
+        // Trigger if video is anywhere between trigger point and seek target
+        // (handles late-loading data where video already passed the trigger)
+        if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
           const skipSec = Math.round((seg.seekTargetMs - seg.triggerMs) / 1000);
 
           console.log('[AutoSkip] ⏭ Triggering skip at', (ms / 1000).toFixed(1) + 's →',
