@@ -114,4 +114,19 @@ observer.observe(document.body, {
   attributeFilter: ['class', 'style', 'aria-label'],
 });
 
-setInterval(tryClick, 500);
+// Periodically nudge the player with a synthetic mousemove so YouTube reveals
+// the Jump ahead button even when the user isn't moving their mouse.
+function nudgePlayer() {
+  const player = document.querySelector('#movie_player, .html5-video-player');
+  if (!player) return;
+  const r = player.getBoundingClientRect();
+  player.dispatchEvent(new MouseEvent('mousemove', {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: r.left + r.width / 2,
+    clientY: r.top + r.height / 2,
+  }));
+}
+
+setInterval(() => { nudgePlayer(); tryClick(); }, 500);
