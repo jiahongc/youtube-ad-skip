@@ -12,13 +12,12 @@ let musicVideoBlocked = false;
 
 const SKIP_SELECTORS = [
   '.ytp-jump-ahead-button',
-  '.ytp-skip-intro-button',
   '.ytp-ad-skip-button',
   '.ytp-skip-ad-button',
   'button.ytp-ad-skip-button-modern',
   'button[class*="ytp-skip"]',
 ];
-const SKIP_LABEL_PATTERN = /\b(jump ahead|skip (ad|ads|intro|sponsor|promotion)|skip intro)\b/i;
+const SKIP_LABEL_PATTERN = /\b(jump ahead|skip (ad|ads|sponsor|promotion))\b/i;
 
 function isVisible(el) {
   const r = el.getBoundingClientRect();
@@ -27,7 +26,7 @@ function isVisible(el) {
 
 function hasSkipLikeClass(el) {
   const cls = (el.className || '').toString();
-  return /ytp-(?:jump-ahead|skip-intro|ad-skip|skip-ad|skip)/i.test(cls);
+  return /ytp-(?:jump-ahead|ad-skip|skip-ad|skip)/i.test(cls) && !/skip-intro/i.test(cls);
 }
 
 function hasSkipLikeLabel(el) {
@@ -98,7 +97,7 @@ function showToast(msg) {
       transform: 'translateX(-50%)',
       background: 'rgba(0,0,0,0.78)', color: '#fff',
       padding: '7px 16px', borderRadius: '20px',
-      fontSize: '14px', fontFamily: 'Roboto, sans-serif',
+      fontSize: '16px', fontFamily: 'Roboto, sans-serif',
       fontWeight: '500', letterSpacing: '0.01em',
       zIndex: '9999', pointerEvents: 'none',
       opacity: '0', transition: 'opacity 0.15s ease', whiteSpace: 'nowrap',
@@ -108,7 +107,7 @@ function showToast(msg) {
   t.textContent = `⏭  ${msg}`;
   t.style.opacity = '1';
   clearTimeout(t._t);
-  t._t = setTimeout(() => (t.style.opacity = '0'), 4000);
+  t._t = setTimeout(() => (t.style.opacity = '0'), 5000);
 }
 
 // ── Listen for skip notifications from injected.js ───────────────────────

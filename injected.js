@@ -67,6 +67,45 @@
     return { title, startMs };
   }
 
+  function parseTimestampToMs(value) {
+    if (!value || typeof value !== 'string') return null;
+    const parts = value.trim().split(':').map(part => parseInt(part, 10));
+    if (!parts.length || parts.some(n => !Number.isFinite(n))) return null;
+    let seconds = 0;
+    for (const part of parts) seconds = seconds * 60 + part;
+    return seconds * 1000;
+  }
+
+  function collectDomChapterPoints() {
+    const selectors = [
+      '.ytp-chapter-title-content',
+      '.ytp-chapter-hover-container',
+      'ytd-macro-markers-list-item-renderer',
+      '[class*="chapter"]',
+    ];
+
+    const candidates = [];
+    for (const sel of selectors) {
+      for (const el of document.querySelectorAll(sel)) {
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text) continue;
+
+        const timeMatch = text.match(/\b\d{1,2}:\d{2}(?::\d{2})?\b/);
+        const titleMatch = text.match(/[A-Za-z][A-Za-z0-9 '&/-]{2,}/);
+        if (!timeMatch || !titleMatch) continue;
+
+        const startMs = parseTimestampToMs(timeMatch[0]);
+        const title = titleMatch[0].trim();
+        if (!Number.isFinite(startMs) || !title) continue;
+        candidates.push({ title, startMs });
+      }
+    }
+
+    return Array.from(new Map(
+      candidates.map(ch => [`${ch.startMs}|${ch.title.toLowerCase()}`, ch])
+    ).values()).sort((a, b) => a.startMs - b.startMs);
+  }
+
   function collectChapterFallbackPoints(node, out, depth, seen) {
     if (!node || typeof node !== 'object' || (depth || 0) > 20) return;
     if (!seen) seen = new WeakSet();
@@ -139,6 +178,11 @@
     return AD_WEAK_PATTERN.test(title) && AD_CONTEXT_PATTERN.test(title);
   }
 
+  function isIntroChapterTitle(title) {
+    if (!title) return false;
+    return INTRO_CHAPTER_PATTERN.test(title) && !INTRO_AD_ALLOW_PATTERN.test(title);
+  }
+
   function applySettings(next) {
     const normalized = {
       skipJumpAhead: next?.skipJumpAhead !== false,
@@ -153,8 +197,7 @@
 
     console.log('[AutoSkip] Settings updated:', settings);
     reset();
-    const data = getPageData();
-    if (data) process(data);
+    processAllSources();
     attachHandlerIfReady();
   }
 
@@ -239,6 +282,49 @@
         console.log('[AutoSkip] Break chapter:', '"' + ch.title + '"',
           (ch.startMs / 1000).toFixed(1) + 's ->', (nextChapter.startMs / 1000).toFixed(1) + 's');
       }
+    }
+
+    return segments;
+  }
+
+  function extractChapterSegmentsFromPoints(points) {
+    const segments = [];
+    if (!Array.isArray(points) || points.length < 2) return segments;
+
+    console.log('[AutoSkip] DOM chapters found:', points.map(c => '"' + c.title + '" @' + (c.startMs / 1000).toFixed(0) + 's').join(', '));
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const ch = points[i];
+      const nextChapter = points[i + 1];
+      if (!isAdChapterTitle(ch.title)) continue;
+      if (nextChapter.startMs <= ch.startMs) continue;
+
+      segments.push({
+        label: '"' + ch.title + '"',
+        triggerMs: ch.startMs,
+        seekTargetMs: nextChapter.startMs,
+      });
+      console.log('[AutoSkip] DOM break chapter:', '"' + ch.title + '"',
+        (ch.startMs / 1000).toFixed(1) + 's ->', (nextChapter.startMs / 1000).toFixed(1) + 's');
+    }
+
+    return segments;
+  }
+
+  function extractIntroSegmentsFromPoints(points) {
+    const segments = [];
+    if (!Array.isArray(points) || points.length < 2) return segments;
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const ch = points[i];
+      const nextChapter = points[i + 1];
+      if (!isIntroChapterTitle(ch.title)) continue;
+      if (nextChapter.startMs <= ch.startMs) continue;
+      segments.push({
+        label: '"' + ch.title + '"',
+        triggerMs: ch.startMs,
+        seekTargetMs: nextChapter.startMs,
+      });
     }
 
     return segments;
@@ -342,8 +428,7 @@
     const delays = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000];
     for (const delay of delays) {
       const timer = setTimeout(() => {
-        const data = getPageData();
-        if (data) process(data);
+        processAllSources();
         attachHandlerIfReady();
       }, delay);
       pendingRetryTimers.push(timer);
@@ -367,6 +452,46 @@
     if (!payload || typeof payload !== 'object') return;
     process(payload);
     attachHandlerIfReady();
+  }
+
+  function processAllSources() {
+    const pageData = getPageData();
+    const playerResponse = getPlayerResponse();
+    const chapterPoints = collectDomChapterPoints();
+
+    let jumpAhead = [];
+    let chapters = [];
+    let introSegments = [];
+
+    refreshMusicGuard();
+    if (isMusicVideo) return;
+
+    if (settings.skipJumpAhead) {
+      jumpAhead = [
+        ...extractJumpAheadSegments(pageData),
+        ...extractJumpAheadSegments(playerResponse),
+      ];
+    }
+
+    if (settings.skipAdChapter) {
+      const chapterSources = [
+        ...extractChapterSegments(pageData),
+        ...extractChapterSegments(playerResponse),
+        ...extractChapterSegmentsFromPoints(chapterPoints),
+      ];
+      chapters = chapterSources;
+    }
+
+    introSegments = extractIntroSegmentsFromPoints(chapterPoints);
+
+    if (jumpAhead.length && introSegments.length) {
+      jumpAhead = jumpAhead.filter(seg => !introSegments.some(intro =>
+        seg.triggerMs >= intro.triggerMs && seg.triggerMs < intro.seekTargetMs
+      ));
+    }
+
+    const all = [...jumpAhead, ...chapters];
+    if (all.length) armSkip(all);
   }
 
   // ── Process a data payload ───────────────────────────────────────────────
@@ -409,10 +534,11 @@
   const poll = setInterval(() => {
     attempts++;
     const data = getPageData();
-    if (data) {
+    const player = getPlayerResponse();
+    if (data || player) {
       clearInterval(poll);
       console.log('[AutoSkip] Page data found (attempt ' + attempts + ')');
-      process(data);
+      processAllSources();
       attachHandlerIfReady();
     } else if (attempts > 50) {
       clearInterval(poll);
