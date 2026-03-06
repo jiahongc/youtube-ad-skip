@@ -18,7 +18,7 @@ const SKIP_SELECTORS = [
   'button.ytp-ad-skip-button-modern',
   'button[class*="ytp-skip"]',
 ];
-const SKIP_TEXT = /^skip/i;
+const SKIP_LABEL_PATTERN = /\b(jump ahead|skip (ad|ads|intro|sponsor|promotion)|skip intro)\b/i;
 
 function isVisible(el) {
   const r = el.getBoundingClientRect();
@@ -28,6 +28,17 @@ function isVisible(el) {
 function hasSkipLikeClass(el) {
   const cls = (el.className || '').toString();
   return /ytp-(?:jump-ahead|skip-intro|ad-skip|skip-ad|skip)/i.test(cls);
+}
+
+function hasSkipLikeLabel(el) {
+  const text = [
+    el.innerText || '',
+    el.textContent || '',
+    el.getAttribute('aria-label') || '',
+    el.getAttribute('title') || '',
+    el.getAttribute('data-title-no-tooltip') || '',
+  ].join(' ').replace(/\s+/g, ' ').trim();
+  return SKIP_LABEL_PATTERN.test(text);
 }
 
 function isLikelyMusicVideoByDom() {
@@ -143,9 +154,9 @@ function tryClick() {
       return;
     }
 
-    const text = (el.innerText || el.textContent || '').trim();
-    if (SKIP_TEXT.test(text)) {
-      clickBtn(el, text);
+    if (hasSkipLikeLabel(el)) {
+      const label = (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim() || 'Auto skipped';
+      clickBtn(el, label);
       return;
     }
   }

@@ -1,59 +1,66 @@
 # Youtube Skip In-Video Ads
 
-A lightweight Chrome extension that skips in-video sponsored segments using:
+Chrome extension that skips in-video ad/sponsor sections on YouTube using:
 
 - YouTube Jump Ahead data/buttons
-- Sponsor/ad chapter titles
+- Chapter title detection for sponsor/ad chapters
 
-It does not use third-party segment databases.
+No third-party sponsor database is used.
 
-## Current behavior
+## Quick Start
 
-- Two popup toggles (both ON by default):
-  - `Skip to Jump Ahead Section`
-  - `Skip Sponsored/Ad Chapters`
-- Music videos are excluded by default.
-- Runs only on `www.youtube.com`.
-- Uses resilient detection for YouTube SPA navigation and payload updates.
-
-## Permissions
-
-- `storage`: saves popup toggle settings (`chrome.storage.sync`).
-
-## Installation
-
-This extension is not on the Chrome Web Store. Load it manually:
-
-1. Clone or download this repo:
+1. Clone the repo:
    ```bash
    git clone https://github.com/jiahongc/youtube-ad-skip.git
    ```
-2. Open Chrome and go to `chrome://extensions/`.
+2. Open Chrome at `chrome://extensions/`.
 3. Enable **Developer mode**.
-4. Click **Load unpacked** and select this repo folder.
-5. Open a YouTube video.
-6. Click the extension icon to adjust toggle settings.
+4. Click **Load unpacked** and choose this folder.
+5. Open any YouTube video.
+6. Click the extension icon to configure toggles.
 
-## Notes
+## What It Does
 
-- Skip reliability depends on what YouTube exposes for a given video (Jump Ahead data or chapter metadata).
-- YouTube frequently changes internal payload shape and UI classes; this repo uses multiple fallback paths to reduce breakage.
+- Auto-skips when YouTube exposes Jump Ahead data.
+- Auto-skips chapter-marked sponsor/ad segments.
+- Shows a toast when a skip is performed.
+- Saves toggle preferences using `chrome.storage.sync`.
 
-## Key files
+## What It Does Not Do
+
+- Does not use external tracking/analytics.
+- Does not use third-party segment services.
+- Does not skip all sponsor reads if YouTube provides no usable metadata.
+
+## Default Behavior
+
+- `Skip to Jump Ahead Section`: ON
+- `Skip Sponsored/Ad Chapters`: ON
+- Music videos: blocked by default
+- Intro chapters are not skipped unless the chapter title also contains ad/sponsor cues.
+
+## Documentation
+
+- Usage guide: [docs/USAGE.md](./docs/USAGE.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
+- Changelog: [CHANGELOG.md](./CHANGELOG.md)
+- Privacy policy page: https://jiahongc.github.io/youtube-ad-skip/privacy.html
+- Privacy markdown fallback: [PRIVACY.md](./PRIVACY.md)
+
+## Permissions
+
+- `storage`: saves the two toggle preferences.
+
+## Key Files
 
 | File | Purpose |
 |------|---------|
 | `manifest.json` | Extension metadata (Manifest V3) |
-| `content.js` | Isolated-world script for UI/button fallback and toast notifications |
-| `injected.js` | Main-world script for Jump Ahead/chapter extraction and seeking |
-| `popup.html` / `popup.js` / `popup.css` | Popup UI and toggle persistence |
-| `generate-icons.py` | Regenerates `icon16/48/128.png` |
+| `content.js` | Fallback button detection + toast UI |
+| `injected.js` | Main YouTube data parsing and seek logic |
+| `popup.html` / `popup.js` / `popup.css` | Popup settings UI |
+| `generate-icons.py` | Rebuilds `icon16/48/128.png` |
 
 ## License
 
 MIT
-
-## Privacy Policy
-
-- Dedicated page (GitHub Pages): `https://jiahongc.github.io/youtube-ad-skip/privacy.html`
-- Markdown fallback: [PRIVACY.md](./PRIVACY.md)

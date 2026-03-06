@@ -74,8 +74,7 @@
     seen.add(node);
 
     const direct = chapterPointFromRenderer(node.chapterRenderer) ||
-      chapterPointFromRenderer(node.macroMarkersListItemRenderer?.chapterRenderer) ||
-      chapterPointFromRenderer(node);
+      chapterPointFromRenderer(node.macroMarkersListItemRenderer?.chapterRenderer);
     if (direct) out.push(direct);
 
     for (const v of Object.values(node)) collectChapterFallbackPoints(v, out, (depth || 0) + 1, seen);
@@ -125,7 +124,7 @@
 
   // Chapter title matching: strong ad signals + weak signals with context,
   // while excluding common non-ad uses of "break".
-  const AD_STRONG_PATTERN = /\b(ad(?:vert(?:isement)?)?\s*break|commercial(?:\s*break)?|sponsor(?:ed|ship)?(?:\s*(?:segment|section|message))?|paid\s*(?:promotion|partnership)|brought to you by|in partnership with|brand deal|promo(?:tion)?)\b/i;
+  const AD_STRONG_PATTERN = /\b(ad(?:vert(?:isement)?)?\s*break|commercial(?:\s*break)?|sponsor(?:ed|ship)?(?:\s*(?:segment|section|message))?|paid\s*(?:promotion|partnership)|brought to you by|in partnership with|brand deal|promo(?:tion)?|ad read)\b/i;
   const AD_WEAK_PATTERN = /\b(partner(?:ship)?|message from|word from|thanks to)\b/i;
   const AD_CONTEXT_PATTERN = /\b(sponsor|promo|paid|commercial|advert(?:isement)?)\b/i;
   const AD_EXCLUDE_PATTERN = /\b(spring break|coffee break|breakdown|adventure)\b/i;
@@ -357,6 +356,13 @@
     return /\/youtubei\/v1\/(?:next|player|browse|updated_metadata|reel\/reel_item_watch)/.test(rawUrl);
   }
 
+  function parseJsonPayload(raw) {
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.replace(/^\uFEFF/, '').trimStart();
+    if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return null;
+    try { return JSON.parse(trimmed); } catch (_) { return null; }
+  }
+
   function processNetworkPayload(url, payload) {
     if (!payload || typeof payload !== 'object') return;
     process(payload);
@@ -445,10 +451,8 @@
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
       if (shouldInspectNetworkUrl(url)) {
         resp.clone().text().then(raw => {
-          if (!raw || raw[0] !== '{') return;
-          try {
-            processNetworkPayload(url, JSON.parse(raw));
-          } catch (_) {}
+          const payload = parseJsonPayload(raw);
+          if (payload) processNetworkPayload(url, payload);
         }).catch(() => {});
       }
     } catch (_) {}
@@ -466,10 +470,13 @@
       try {
         const url = this.__autoskipUrl || '';
         if (!shouldInspectNetworkUrl(url)) return;
+        if (this.responseType === 'json' && this.response && typeof this.response === 'object') {
+          processNetworkPayload(url, this.response);
+          return;
+        }
         if (this.responseType && this.responseType !== '' && this.responseType !== 'text') return;
-        const text = typeof this.responseText === 'string' ? this.responseText : '';
-        if (!text || text[0] !== '{') return;
-        processNetworkPayload(url, JSON.parse(text));
+        const payload = parseJsonPayload(typeof this.responseText === 'string' ? this.responseText : '');
+        if (payload) processNetworkPayload(url, payload);
       } catch (_) {}
     });
     return origXHRSend.apply(this, args);
