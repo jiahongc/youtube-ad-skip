@@ -11,19 +11,23 @@ let settings = { ...DEFAULT_SETTINGS };
 let musicVideoBlocked = false;
 
 const SKIP_SELECTORS = [
-  '[aria-label="Jump ahead"]',
-  '[title="Jump ahead"]',
   '.ytp-jump-ahead-button',
   '.ytp-skip-intro-button',
   '.ytp-ad-skip-button',
   '.ytp-skip-ad-button',
   'button.ytp-ad-skip-button-modern',
+  'button[class*="ytp-skip"]',
 ];
-const SKIP_TEXT = /^jump ahead$|^skip/i;
+const SKIP_TEXT = /^skip/i;
 
 function isVisible(el) {
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
+}
+
+function hasSkipLikeClass(el) {
+  const cls = (el.className || '').toString();
+  return /ytp-(?:jump-ahead|skip-intro|ad-skip|skip-ad|skip)/i.test(cls);
 }
 
 function isLikelyMusicVideoByDom() {
@@ -133,8 +137,14 @@ function tryClick() {
   const player = document.querySelector('#movie_player, .html5-video-player');
   if (!player) return;
   for (const el of player.querySelectorAll('button, [role="button"]')) {
+    if (!isVisible(el)) continue;
+    if (hasSkipLikeClass(el)) {
+      clickBtn(el, el.getAttribute('aria-label') || el.innerText || 'Auto skipped');
+      return;
+    }
+
     const text = (el.innerText || el.textContent || '').trim();
-    if (SKIP_TEXT.test(text) && isVisible(el)) {
+    if (SKIP_TEXT.test(text)) {
       clickBtn(el, text);
       return;
     }

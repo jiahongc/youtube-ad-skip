@@ -41,17 +41,44 @@
     if (seen.has(node)) return;
     seen.add(node);
 
+    if (Array.isArray(node) && node.length) {
+      const chapterItems = node
+        .map(item => item?.chapterRenderer || item?.macroMarkersListItemRenderer?.chapterRenderer)
+        .filter(Boolean);
+      if (chapterItems.length === node.length) {
+        out.push(chapterItems);
+        return;
+      }
+    }
+
     if (node.chapterRenderer && typeof node.chapterRenderer === 'object') {
       out.push([node.chapterRenderer]);
       return;
     }
 
-    if (Array.isArray(node) && node.length && node.every(item => item?.chapterRenderer)) {
-      out.push(node.map(item => item.chapterRenderer));
-      return;
-    }
-
     for (const v of Object.values(node)) collectChapterLists(v, out, (depth || 0) + 1, seen);
+  }
+
+  function chapterPointFromRenderer(c) {
+    if (!c || typeof c !== 'object') return null;
+    const title = c.title?.simpleText || c.title?.runs?.[0]?.text || '';
+    const startMs = parseInt(c.timeRangeStartMillis, 10);
+    if (!Number.isFinite(startMs)) return null;
+    return { title, startMs };
+  }
+
+  function collectChapterFallbackPoints(node, out, depth, seen) {
+    if (!node || typeof node !== 'object' || (depth || 0) > 20) return;
+    if (!seen) seen = new WeakSet();
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    const direct = chapterPointFromRenderer(node.chapterRenderer) ||
+      chapterPointFromRenderer(node.macroMarkersListItemRenderer?.chapterRenderer) ||
+      chapterPointFromRenderer(node);
+    if (direct) out.push(direct);
+
+    for (const v of Object.values(node)) collectChapterFallbackPoints(v, out, (depth || 0) + 1, seen);
   }
 
   const MUSIC_TITLE_PATTERN = /\b(official music video|music video|lyric video|official audio|visualizer)\b/i;
@@ -140,7 +167,7 @@
     for (const action of timelyActions) {
       const vm = action?.timelyActionViewModel;
       if (!vm) continue;
-      if (vm.content?.buttonViewModel?.title !== 'Jump ahead') continue;
+      const label = vm.content?.buttonViewModel?.title || vm.content?.buttonViewModel?.accessibilityText || 'Auto skip segment';
 
       const triggerMs = parseInt(vm.startTimeMilliseconds, 10);
       if (isNaN(triggerMs)) continue;
@@ -157,10 +184,11 @@
         }
       }
 
-      if (seekTargetMs && seekTargetMs > triggerMs) {
-        segments.push({ label: 'Jump ahead', triggerMs, seekTargetMs });
-        console.log('[AutoSkip] Jump ahead: trigger', (triggerMs / 1000).toFixed(1) + 's ->',
-          (seekTargetMs / 1000).toFixed(1) + 's (' + Math.round((seekTargetMs - triggerMs) / 1000) + 's)');
+      const delta = seekTargetMs ? seekTargetMs - triggerMs : 0;
+      if (seekTargetMs && delta >= 2000 && delta <= 600000) {
+        segments.push({ label, triggerMs, seekTargetMs });
+        console.log('[AutoSkip] Jump segment: trigger', (triggerMs / 1000).toFixed(1) + 's ->',
+          (seekTargetMs / 1000).toFixed(1) + 's (' + Math.round(delta / 1000) + 's)');
       }
     }
     return segments;
@@ -174,17 +202,22 @@
     // Keep chapter collections separate so "next chapter" stays in the same list.
     const chapterLists = [];
     collectChapterLists(data, chapterLists, 0, new WeakSet());
-    if (!chapterLists.length) return segments;
+    const normalizedLists = chapterLists
+      .map(rawList => rawList.map(chapterPointFromRenderer).filter(Boolean).sort((a, b) => a.startMs - b.startMs))
+      .filter(list => list.length >= 2);
 
-    for (const rawList of chapterLists) {
-      const chapters = rawList
-        .map(c => ({
-          title: c.title?.simpleText || c.title?.runs?.[0]?.text || '',
-          startMs: parseInt(c.timeRangeStartMillis, 10),
-        }))
-        .filter(c => !isNaN(c.startMs))
-        .sort((a, b) => a.startMs - b.startMs);
+    // Fallback when chapter data isn't in expected list shapes.
+    if (!normalizedLists.length) {
+      const fallbackPoints = [];
+      collectChapterFallbackPoints(data, fallbackPoints, 0, new WeakSet());
+      const deduped = Array.from(new Map(
+        fallbackPoints.map(ch => [`${ch.startMs}|${ch.title}`, ch])
+      ).values()).sort((a, b) => a.startMs - b.startMs);
+      if (deduped.length >= 2) normalizedLists.push(deduped);
+    }
+    if (!normalizedLists.length) return segments;
 
+    for (const chapters of normalizedLists) {
       if (!chapters.length) continue;
 
       console.log('[AutoSkip] Chapters found:', chapters.map(c => '"' + c.title + '" @' + (c.startMs / 1000).toFixed(0) + 's').join(', '));
@@ -215,6 +248,7 @@
   let handler = null;
   let attachedVideo = null;
   let lastLogTime = -99999;
+  let pendingRetryTimers = [];
 
   function attachHandlerIfReady() {
     const video = document.querySelector('video');
@@ -296,6 +330,36 @@
     }
   }
 
+  function clearPendingRetryTimers() {
+    for (const t of pendingRetryTimers) clearTimeout(t);
+    pendingRetryTimers = [];
+  }
+
+  function scheduleProcessRetries() {
+    clearPendingRetryTimers();
+    const delays = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000];
+    for (const delay of delays) {
+      const timer = setTimeout(() => {
+        const data = getPageData();
+        if (data) process(data);
+        attachHandlerIfReady();
+      }, delay);
+      pendingRetryTimers.push(timer);
+    }
+  }
+
+  function shouldInspectNetworkUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return false;
+    if (!rawUrl.includes('/youtubei/v1/')) return false;
+    return /\/youtubei\/v1\/(?:next|player|browse|updated_metadata|reel\/reel_item_watch)/.test(rawUrl);
+  }
+
+  function processNetworkPayload(url, payload) {
+    if (!payload || typeof payload !== 'object') return;
+    process(payload);
+    attachHandlerIfReady();
+  }
+
   // ── Process a data payload ───────────────────────────────────────────────
 
   function process(data) {
@@ -318,6 +382,7 @@
   function reset() {
     activeSegments = [];
     lastLogTime = -99999;
+    clearPendingRetryTimers();
     if (handler && attachedVideo) {
       attachedVideo.removeEventListener('timeupdate', handler);
     }
@@ -350,27 +415,15 @@
     console.log('[AutoSkip] Navigation - resetting');
     reset();
     refreshMusicGuard();
-    const immediate = getPageData();
-    if (immediate) {
-      process(immediate);
-      attachHandlerIfReady();
-      return;
-    }
-    setTimeout(() => {
-      const d = getPageData();
-      if (d) process(d);
-      attachHandlerIfReady();
-    }, 500);
-    setTimeout(() => {
-      const d = getPageData();
-      if (d) process(d);
-      attachHandlerIfReady();
-    }, 1500);
+    scheduleProcessRetries();
   });
 
   // Keep trying to attach if segments are known but the video element appears later.
   const rootObserver = new MutationObserver(() => {
-    if (activeSegments.length && !handler) attachHandlerIfReady();
+    if (!activeSegments.length) return;
+    const currentVideo = document.querySelector('video');
+    if (!currentVideo) return;
+    if (!handler || attachedVideo !== currentVideo) attachHandlerIfReady();
   });
   rootObserver.observe(document.documentElement || document, { childList: true, subtree: true });
 
@@ -387,14 +440,35 @@
     const resp = await origFetch.apply(this, args);
     try {
       const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-      if (url.includes('/youtubei/v1/next')) {
-        resp.clone().json().then(d => {
-          console.log('[AutoSkip] Intercepted /next');
-          process(d);
-          attachHandlerIfReady();
+      if (shouldInspectNetworkUrl(url)) {
+        resp.clone().text().then(raw => {
+          if (!raw || raw[0] !== '{') return;
+          try {
+            processNetworkPayload(url, JSON.parse(raw));
+          } catch (_) {}
         }).catch(() => {});
       }
     } catch (_) {}
     return resp;
+  };
+
+  const origXHROpen = XMLHttpRequest.prototype.open;
+  const origXHRSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.__autoskipUrl = typeof url === 'string' ? url : (url?.toString?.() || '');
+    return origXHROpen.call(this, method, url, ...rest);
+  };
+  XMLHttpRequest.prototype.send = function (...args) {
+    this.addEventListener('load', () => {
+      try {
+        const url = this.__autoskipUrl || '';
+        if (!shouldInspectNetworkUrl(url)) return;
+        if (this.responseType && this.responseType !== '' && this.responseType !== 'text') return;
+        const text = typeof this.responseText === 'string' ? this.responseText : '';
+        if (!text || text[0] !== '{') return;
+        processNetworkPayload(url, JSON.parse(text));
+      } catch (_) {}
+    });
+    return origXHRSend.apply(this, args);
   };
 })();
