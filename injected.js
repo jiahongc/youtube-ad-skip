@@ -129,9 +129,12 @@
   const AD_WEAK_PATTERN = /\b(partner(?:ship)?|message from|word from|thanks to)\b/i;
   const AD_CONTEXT_PATTERN = /\b(sponsor|promo|paid|commercial|advert(?:isement)?)\b/i;
   const AD_EXCLUDE_PATTERN = /\b(spring break|coffee break|breakdown|adventure)\b/i;
+  const INTRO_CHAPTER_PATTERN = /\b(intro|introduction|opening|cold open|welcome)\b/i;
+  const INTRO_AD_ALLOW_PATTERN = /\b(ad|sponsor|sponsored|promo|promotion|paid|commercial|partner(?:ship)?|brought to you by)\b/i;
 
   function isAdChapterTitle(title) {
     if (!title) return false;
+    if (INTRO_CHAPTER_PATTERN.test(title) && !INTRO_AD_ALLOW_PATTERN.test(title)) return false;
     if (AD_EXCLUDE_PATTERN.test(title)) return false;
     if (AD_STRONG_PATTERN.test(title)) return true;
     return AD_WEAK_PATTERN.test(title) && AD_CONTEXT_PATTERN.test(title);

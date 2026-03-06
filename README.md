@@ -52,3 +52,8 @@ This extension is not on the Chrome Web Store. Load it manually:
 ## License
 
 MIT
+
+## Privacy Policy
+
+- Dedicated page (GitHub Pages): `https://jiahongc.github.io/youtube-ad-skip/privacy.html`
+- Markdown fallback: [PRIVACY.md](./PRIVACY.md)
