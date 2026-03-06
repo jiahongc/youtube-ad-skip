@@ -1,59 +1,53 @@
-# YouTube Auto Skip Promotions
+# Youtube Skip In-Video Ads
 
-A lightweight Chrome extension that automatically clicks YouTube's built-in **"Skip promotion"** button so you never have to.
+A lightweight Chrome extension that skips in-video sponsored segments using:
 
-> **How it works:** YouTube already detects paid/sponsored segments in videos and surfaces a native skip button in the bottom-right of the player. This extension just clicks it for you the moment it appears.
+- YouTube Jump Ahead data/buttons
+- Sponsor/ad chapter titles
 
----
+It does not use third-party segment databases.
 
-## Features
+## Current behavior
 
-- Auto-clicks YouTube's native skip button (no third-party segment database needed)
-- Works for skip-intro buttons and promoted segment skips
-- Uses `MutationObserver` for instant reaction — no noticeable delay
-- Polling fallback every 500 ms for edge cases
-- No permissions required — runs only on `youtube.com`
-- Zero external dependencies
+- Two popup toggles (both ON by default):
+  - `Skip to Jump Ahead Section`
+  - `Skip Sponsored/Ad Chapters`
+- Music videos are excluded by default.
+- Runs only on `www.youtube.com`.
+- Uses resilient detection for YouTube SPA navigation and payload updates.
 
----
+## Permissions
+
+- `storage`: saves popup toggle settings (`chrome.storage.sync`).
 
 ## Installation
 
 This extension is not on the Chrome Web Store. Load it manually:
 
-1. Clone or download this repo
+1. Clone or download this repo:
    ```bash
    git clone https://github.com/jiahongc/youtube-ad-skip.git
    ```
-2. Open Chrome and go to `chrome://extensions/`
-3. Enable **Developer mode** (toggle, top-right)
-4. Click **Load unpacked** and select the repo folder
-5. Visit any YouTube video — the extension is active immediately
+2. Open Chrome and go to `chrome://extensions/`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked** and select this repo folder.
+5. Open a YouTube video.
+6. Click the extension icon to adjust toggle settings.
 
----
+## Notes
 
-## How to find the skip button selector
+- Skip reliability depends on what YouTube exposes for a given video (Jump Ahead data or chapter metadata).
+- YouTube frequently changes internal payload shape and UI classes; this repo uses multiple fallback paths to reduce breakage.
 
-YouTube can change its CSS class names. If the extension stops working:
-
-1. Play a video with a sponsored segment until the skip button appears
-2. Right-click the skip button → **Inspect**
-3. Note the class name on the `<button>` element (e.g. `.ytp-skip-intro-button`)
-4. Add it to the `SKIP_SELECTORS` array in `content.js`
-
-The text-based fallback in `content.js` will still catch most cases even if class names change.
-
----
-
-## Files
+## Key files
 
 | File | Purpose |
 |------|---------|
-| `manifest.json` | Chrome extension manifest (Manifest V3) |
-| `content.js` | Content script — detects and clicks the skip button |
-| `generate-icons.py` | Generates `icon16/48/128.png` (pure Python, no deps) |
-
----
+| `manifest.json` | Extension metadata (Manifest V3) |
+| `content.js` | Isolated-world script for UI/button fallback and toast notifications |
+| `injected.js` | Main-world script for Jump Ahead/chapter extraction and seeking |
+| `popup.html` / `popup.js` / `popup.css` | Popup UI and toggle persistence |
+| `generate-icons.py` | Regenerates `icon16/48/128.png` |
 
 ## License
 
