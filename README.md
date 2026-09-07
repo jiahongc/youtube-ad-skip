@@ -6,7 +6,15 @@ It also includes an optional, best-effort chapter-based ad skip feature when You
 
 > Not an ad blocker: it does not block, remove, or skip the video ads YouTube plays before or during a video. It only automates skip actions YouTube already provides. Not affiliated with, endorsed by, or sponsored by YouTube or Google LLC.
 
-## Quick Start
+## Install
+
+**[Add to Chrome from the Chrome Web Store](https://chromewebstore.google.com/detail/auto-jump-ahead-for-youtu/ijihjdddhambpocokllomjmmgfobollp)**
+
+Install the published extension, then open YouTube and use the extension popup to configure the two toggles.
+
+The store release and this source checkout can differ. Use the store listing for the published version; the developer setup below loads the code on this branch.
+
+## Developer setup
 
 1. Clone the repo:
    ```bash
@@ -32,7 +40,7 @@ It also includes an optional, best-effort chapter-based ad skip feature when You
 - Does not guarantee skipping every sponsor read or embedded advertising mention.
 - Does not skip videos when YouTube provides no usable Jump Ahead or chapter data.
 
-## Default Behavior
+## Source Defaults
 
 - `YouTube Jump Ahead`: ON
 - `Chapter-Based Ad Skips`: ON
